@@ -31,7 +31,7 @@
 │   ├── ethers-lib.ts       # Reusable helper with the core deployment 
 │   └── scenario.ts         # Simulates E2E user flow for the demo
 ├── tests/
-│   └── smartlease.test.js  # Automated tests for contract functions
+│   └── SmartLease_test.sol # Automated tests for contract functions
 ├── pdf/                    # Assignment documents
 └── ...                     # Other config and supporting files
 ```
@@ -43,33 +43,34 @@
 *   **`scripts/scenario.ts`**: The script to run for the final presentation. It will execute a full user story.
 *   **`tests/smartlease.test.js`**: Contains all unit tests. Essential for verifying contract correctness.
 
-## 4. Remix IDE Workflow
+## 4. Remix IDE Web Workflow
 
-This project is built to be run entirely within Remix IDE.
+This project is designed to be developed, tested, and demonstrated **entirely within the Remix IDE web interface**.
 
-### A. Setup (One-time)
-1.  Clone the repository to your local machine.
-2.  Connect the local project folder to Remix IDE using `remixd`.
-3.  In Remix, ensure you are in the connected `localhost` workspace.
+### A. Setup
+1.  Clone the project into a Remix workspace using the "Clone" feature on the homepage with the GitHub URL.
+2.  Work inside that workspace.
 
 ### B. Development Cycle
 1.  **Code**: Edit `contracts/SmartLease.sol`.
 2.  **Compile**:
     -   Go to the `Solidity Compiler` tab.
     -   Select the correct compiler version (e.g., `0.8.26`).
-    -   Compile `SmartLease.sol`. Fix any errors.
+    -   Compile `SmartLease.sol`.
 3.  **Test**:
     -   Go to the `Solidity Unit Testing` tab.
-    -   Select the `tests/` directory and run the `smartlease.test.js` file.
-    -   Ensure all tests pass before proceeding.
+    -   Select the `tests/` directory.
+    -   Click "Run" to execute the tests in `SmartLease_test.sol`.
 
 ### C. Deployment and Demo
-Ensure the `TypeScript` and `Ethers.js` plugins are active in Remix.
 1.  **Deploy to a Testnet**:
-    -   In the Remix File Explorer, navigate to `scripts/`.
-    -   Right-click `deploy.ts` -> `Run`.
-    -   The deployed contract address will appear in the Remix terminal. Copy this address.
+    -   In the `Deploy & Run Transactions` tab, select an environment (e.g., "Injected Provider - MetaMask") connected to a testnet like Sepolia.
+    -   Deploy the `SmartLease` contract.
+    -   Copy the deployed contract address.
 2.  **Run Demo Scenario**:
-    -   Update `scenario.ts` with the new contract address if needed.
-    -   Right-click `scenario.ts` -> `Run`.
-    -   The terminal will log the entire simulation, showing the contract in action.
+    -   Alternatively, for a quick demo, run the scripts. Navigate to the `File Explorer`.
+    -   Right-click `scripts/deploy.ts` -> `Run`.
+    -   Update `scripts/scenario.ts` with the new address if needed.
+    -   Right-click `scripts/scenario.ts` -> `Run` to show the full simulation in the terminal.
+
+  
