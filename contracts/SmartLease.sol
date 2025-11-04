@@ -6,7 +6,7 @@ import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 
 contract SmartLease is ERC721, Ownable {
-    constructor() ERC721("SmartLease Property", "SLEASE") {}
+    constructor() ERC721("SmartLease Property", "SLEASE") Ownable(msg.sender) {}
 
     // --- Property Struct ---
     // Represents metadata for each property
@@ -94,3 +94,4 @@ contract SmartLease is ERC721, Ownable {
         );
     }
 
+}
