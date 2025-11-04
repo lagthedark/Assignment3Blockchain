@@ -1,28 +1,75 @@
-# REMIX DEFAULT WORKSPACE
+# SmartLease: NFT-Based House Leasing System
+**Internal development guide for the TTM4195 project.**
 
-Remix default workspace is present when:
-i. Remix loads for the very first time 
-ii. A new workspace is created with 'Default' template
-iii. There are no files existing in the File Explorer
+## 1. Core Functionality
 
-This workspace contains 3 directories:
+-   **System**: A blockchain-based leasing system using a self-executing smart contract.
+-   **Asset**: Properties are represented as ERC-721 NFTs with on-chain metadata (location, size, value, condition).
+-   **Actors**: `Landlord` (mints NFTs) and `Tenant` (leases NFTs).
+-   **Mechanics**:
+    -   Dynamic rent calculation via a `view` function.
+    -   Fair exchange ensured by a 3-month rent deposit and dual confirmation.
+    -   Landlord protection through deposit seizure on tenant default.
+    -   End-of-lease options including termination and extension.
 
-1. 'contracts': Holds three contracts with increasing levels of complexity.
-2. 'scripts': Contains four typescript files to deploy a contract. It is explained below.
-3. 'tests': Contains one Solidity test file for 'Ballot' contract & one JS test file for 'Storage' contract.
+## 2. Implementation Checklist
 
-# SCRIPTS
+-   [x] **1. NFT Modeling**: Implement ERC-721 with `Property` struct and `mintProperty` function.
+-   [ ] **2. Dynamic Pricing**: Implement the `computeMonthlyRent` view function.
+-   [ ] **3. Fair Exchange**: Implement `applyAndDeposit` and `confirmLease` functions, including NFT escrow.
+-   [ ] **4. Default Protection**: Implement `claimDefault` function.
+-   [ ] **5. End-of-Lease**: Implement `payRent`, `terminateLease`, and `extendLease` functions.
 
-The 'scripts' folder has four typescript files which help to deploy the 'Storage' contract using 'web3.js' and 'ethers.js' libraries.
+## 3. Project Structure and File Roles
 
-For the deployment of any other contract, just update the contract name from 'Storage' to the desired contract and provide constructor arguments accordingly 
-in the file `deploy_with_ethers.ts` or  `deploy_with_web3.ts`
+```
+.
+├── contracts/
+│   └── SmartLease.sol      # Main contract (NFT + Leasing logic)
+├── scripts/
+│   ├── deploy.ts           # Simple script that initiates the deployment
+│   ├── ethers-lib.ts       # Reusable helper with the core deployment 
+│   └── scenario.ts         # Simulates E2E user flow for the demo
+├── tests/
+│   └── smartlease.test.js  # Automated tests for contract functions
+├── pdf/                    # Assignment documents
+└── ...                     # Other config and supporting files
+```
 
-In the 'tests' folder there is a script containing Mocha-Chai unit tests for 'Storage' contract.
+### Key File Explanations:
+*   **`contracts/SmartLease.sol`**: The single source of truth for all on-chain logic.
+*   **`scripts/deploy.ts`**: The main script to run for deployment. It's kept simple and calls the helper library.
+*   **`scripts/ethers-lib.ts`**: A helper library containing the reusable `deploy` function. This separates the complex deployment logic from the simple act of running the deployment.
+*   **`scripts/scenario.ts`**: The script to run for the final presentation. It will execute a full user story.
+*   **`tests/smartlease.test.js`**: Contains all unit tests. Essential for verifying contract correctness.
 
-To run a script, right click on file name in the file explorer and click 'Run'. Remember, Solidity file must already be compiled.
-Output from script will appear in remix terminal.
+## 4. Remix IDE Workflow
 
-Please note, require/import is supported in a limited manner for Remix supported modules.
-For now, modules supported by Remix are ethers, web3, swarmgw, chai, multihashes, remix and hardhat only for hardhat.ethers object/plugin.
-For unsupported modules, an error like this will be thrown: '<module_name> module require is not supported by Remix IDE' will be shown.
+This project is built to be run entirely within Remix IDE.
+
+### A. Setup (One-time)
+1.  Clone the repository to your local machine.
+2.  Connect the local project folder to Remix IDE using `remixd`.
+3.  In Remix, ensure you are in the connected `localhost` workspace.
+
+### B. Development Cycle
+1.  **Code**: Edit `contracts/SmartLease.sol`.
+2.  **Compile**:
+    -   Go to the `Solidity Compiler` tab.
+    -   Select the correct compiler version (e.g., `0.8.26`).
+    -   Compile `SmartLease.sol`. Fix any errors.
+3.  **Test**:
+    -   Go to the `Solidity Unit Testing` tab.
+    -   Select the `tests/` directory and run the `smartlease.test.js` file.
+    -   Ensure all tests pass before proceeding.
+
+### C. Deployment and Demo
+Ensure the `TypeScript` and `Ethers.js` plugins are active in Remix.
+1.  **Deploy to a Testnet**:
+    -   In the Remix File Explorer, navigate to `scripts/`.
+    -   Right-click `deploy.ts` -> `Run`.
+    -   The deployed contract address will appear in the Remix terminal. Copy this address.
+2.  **Run Demo Scenario**:
+    -   Update `scenario.ts` with the new contract address if needed.
+    -   Right-click `scenario.ts` -> `Run`.
+    -   The terminal will log the entire simulation, showing the contract in action.
