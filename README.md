@@ -1,4 +1,4 @@
-REMIX DEFAULT WORKSPACE
+# REMIX DEFAULT WORKSPACE
 
 Remix default workspace is present when:
 i. Remix loads for the very first time 
@@ -11,7 +11,7 @@ This workspace contains 3 directories:
 2. 'scripts': Contains four typescript files to deploy a contract. It is explained below.
 3. 'tests': Contains one Solidity test file for 'Ballot' contract & one JS test file for 'Storage' contract.
 
-SCRIPTS
+# SCRIPTS
 
 The 'scripts' folder has four typescript files which help to deploy the 'Storage' contract using 'web3.js' and 'ethers.js' libraries.
 
