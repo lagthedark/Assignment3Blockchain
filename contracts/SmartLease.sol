@@ -58,7 +58,7 @@ contract SmartLease is ERC721, Ownable {
     // --- Mint Property NFT ---
     // Allows the landlord to mint a new property as an NFT
     function mintProperty(
-        //address landlord_, //Added if necessary 
+        address landlord_, //Added if necessary 
         string memory location_,
         uint256 size_,
         uint256 rooms_,
@@ -66,7 +66,7 @@ contract SmartLease is ERC721, Ownable {
         uint256 baseValueWei_,
         uint256 condition_ 
     ) external onlyOwner {
-        //require(landlord_ != address(0), "landlord required"); //Added if necessary
+        require(landlord_ != address(0), "landlord required"); //Added if necessary
         require(bytes(location_).length > 0, "location required");
         require(size_ > 0, "size > 0");
         require(rooms_ > 0, "rooms > 0");
@@ -78,12 +78,12 @@ contract SmartLease is ERC721, Ownable {
 
         // Store property data (metadata)
         properties[tokenId] = Property({
-            landlord: owner(),  // Owner of the contract is the landlord 
+            //landlord: owner(),  // Owner of the contract is the landlord 
             /*
             Note: I'm not sure if we must store the landlord's address
-            and not make him always be the owner. In this case we should add the things I added and commented
+            and not make him always be the owner. To be more scalable I put the landlord's address here, but we can remove it if necessary
             */
-            //landlord: landlord_, //Added if necessary
+            landlord: landlord_, //Added if necessary
             location: location_,
             size: size_,
             rooms: rooms_,
@@ -94,9 +94,9 @@ contract SmartLease is ERC721, Ownable {
         });
 
         // Mint NFT to the landlord (contract owner)
-        _safeMint(owner(), tokenId);
+        //_safeMint(owner(), tokenId);
 
-        //_safeMint(landlord_, tokenId); //Added if necessary
+        _safeMint(landlord_, tokenId); //Added if necessary
 
         // Emit event for logging the minting process
         emit PropertyMinted(
