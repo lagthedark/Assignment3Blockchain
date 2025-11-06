@@ -36,7 +36,8 @@ contract SmartLease is ERC721, Ownable {
         address tenant;          
         uint256 monthlyRent;     
         uint256 depositHeld;     
-        uint16 durationMonths;   
+        uint16 durationMonths;
+        uint256 startTimestamp;
     }
 
     // Store properties and leases
@@ -53,6 +54,17 @@ contract SmartLease is ERC721, Ownable {
         uint256 yearBuilt,
         uint256 baseValue,
         uint256 condition
+    );
+
+    event LeaseApplied(
+        uint256 indexed tokenId,
+        address tenant,
+        uint256 deposit
+    );
+
+    event LeaseConfirmed(
+        uint256 indexed tokenId,
+        address landlord
     );
 
     // --- Mint Property NFT ---
@@ -157,4 +169,71 @@ contract SmartLease is ERC721, Ownable {
 
         price = tmp / 12;
     }
+
+    /// @notice Applies for a lease and deposits the required amount.
+    /// @param tokenId The NFT being leased.
+    /// @param currentUsage Current period usage
+    /// @param usageCap Predefined option: usage cap for the period (pre-agreed limit).
+    /// @param userScore The tenant's attribute score (0..10).
+    /// @param leaseDurationMonths Lease duration in months.
+    function applyAndDeposit(
+        uint256 tokenId,
+        uint256 currentUsage,
+        uint256 usageCap,
+        uint8 userScore,
+        uint16 leaseDurationMonths
+    ) external payable {
+        Property storage prop = properties[tokenId];
+        require(!prop.isLeased, "already leased");
+        require(prop.landlord != address(0), "invalid landlord");
+        require(leases[tokenId].state == LeaseState.None, "lease exists");
+        require(leaseDurationMonths > 0, "invalid duration");
+
+        // Computing monthly rent
+        uint256 monthly = calculateMonthlyPrice(tokenId, currentUsage, usageCap, userScore, leaseDurationMonths);
+
+        // 3 months deposit
+        uint256 requiredDeposit = monthly * 3;
+        require(msg.value == requiredDeposit, "wrong deposit amount");
+
+        // Saving lease
+        leases[tokenId] = Lease({
+            state: LeaseState.Pending,
+            tenant: msg.sender,
+            monthlyRent: monthly,
+            depositHeld: msg.value,
+            durationMonths: leaseDurationMonths,
+            startTimestamp: 0
+        });
+
+        prop.isLeased = true;
+        
+        emit LeaseApplied(tokenId, msg.sender, msg.value);
+    }
+
+    /// @notice Confirms a lease request, escrowing the NFT and starting the lease.
+    /// @param tokenId The NFT being leased.
+    /// @dev This function is called after the tenant has applied for the lease and deposited the required amount.
+    ///     The landlord must approve the NFT to the contract before calling this function.
+    ///     The function will then transfer the NFT to the contract, marking the lease as 'Active', and starting the lease duration.
+    function confirmLease(
+        uint256 tokenId
+    ) external {
+        Property storage prop = properties[tokenId];
+        Lease storage lease = leases[tokenId];
+
+        require(lease.state == LeaseState.Pending, "not pending");
+        require(msg.sender == prop.landlord, "only landlord");
+        require(ownerOf(tokenId) == msg.sender, "landlord must own NFT");
+
+        // The landlord must approve the contract to manage the NFT
+        _transfer(msg.sender, address(this), tokenId); // escrow
+
+        lease.state = LeaseState.Active;
+        lease.startTimestamp = block.timestamp;
+
+        emit LeaseConfirmed(tokenId, msg.sender);
+    }
+
+
 }
