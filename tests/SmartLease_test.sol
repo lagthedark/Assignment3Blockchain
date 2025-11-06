@@ -43,27 +43,85 @@ contract SmartLease_Test {
 
     /// @notice Tests the lease application and deposit flow (Requirement #3)
     function test_3_ApplyAndDeposit() public {
-        // To be completed:
-        // 1. Mint a property.
-        // 2. Calculate the required deposit (3 months' rent).
-        // 3. Attempt to call applyAndDeposit with an INCORRECT amount and assert that it reverts (using try/catch).
-        // 4. Call applyAndDeposit with the CORRECT amount, simulating the call from the tenant.
-        //    // #sender: tenant
-        //    // #value: [correct deposit]
-        // 5. Assert that the lease state is 'Pending' and that all lease data is stored correctly.
+        // Setup
+        owner = TestsAccounts.getAccount(0);
+        landlord = TestsAccounts.getAccount(1);
+        tenant = TestsAccounts.getAccount(2);
+
+        // #sender: owner
+        smartLease.mintProperty(landlord, "Oslo Center", 100, 3, 2020, 12 ether, 90);
+
+        uint256 tokenId = 0;
+
+        // Compute expected rent
+        uint256 rent = smartLease.calculateMonthlyPrice(tokenId, 0, 1000, 5, 12);
+        uint256 correctDeposit = rent * 3;
+        uint256 wrongDeposit = correctDeposit / 2;
+
+        // Case 1: wrong deposit should revert
+        try smartLease.applyAndDeposit{value: wrongDeposit}(tokenId, 0, 1000, 5, 12) {
+            Assert.ok(false, "Should revert on wrong deposit");
+        } catch {}
+
+        // Case 2: correct deposit should work
+        // #sender: tenant
+        smartLease.applyAndDeposit{value: correctDeposit}(tokenId, 0, 1000, 5, 12);
+
+        (
+            LeaseState state,
+            address tenantAddr,
+            uint256 monthlyRent,
+            uint256 depositHeld,
+            uint16 durationMonths,
+            uint256 startTimestamp
+        ) = smartLease.leases(tokenId);
+
+        Assert.equal(uint(state), uint(LeaseState.Pending), "Lease state should be Pending");
+        Assert.equal(tenantAddr, tenant, "Tenant address mismatch");
+        Assert.equal(monthlyRent, rent, "Monthly rent mismatch");
+        Assert.equal(depositHeld, correctDeposit, "Deposit mismatch");
+        Assert.equal(durationMonths, 12, "Duration mismatch");
+        Assert.equal(startTimestamp, 0, "Start timestamp should be 0 before confirmation");
     }
-    
+
     /// @notice Tests the lease confirmation and NFT escrow (Requirement #3)
     function test_4_ConfirmLease() public {
-        // To be completed:
-        // 1. Simulate the full flow: mint -> applyAndDeposit.
-        // 2. Simulate the approval: the landlord must approve the contract to manage the NFT.
-        //    // #sender: landlord
-        //    smartLease.approve(address(smartLease), 0);
-        // 3. Call confirmLease from the landlord's account.
-        // 4. Assert that the new owner of the NFT is the contract itself (escrow).
-        // 5. Assert that the lease state is 'Active'.
+        owner = TestsAccounts.getAccount(0);
+        landlord = TestsAccounts.getAccount(1);
+        tenant = TestsAccounts.getAccount(2);
+
+        // #sender: owner
+        smartLease.mintProperty(landlord, "Oslo Center", 100, 3, 2020, 12 ether, 90);
+
+        uint256 tokenId = 0;
+        uint256 rent = smartLease.calculateMonthlyPrice(tokenId, 0, 1000, 5, 12);
+        uint256 deposit = rent * 3;
+
+        // #sender: tenant
+        smartLease.applyAndDeposit{value: deposit}(tokenId, 0, 1000, 5, 12);
+
+        // Landlord must approve and confirm
+        // #sender: landlord
+        smartLease.approve(address(smartLease), tokenId);
+        smartLease.confirmLease(tokenId);
+
+        (
+            LeaseState state,
+            address tenantAddr,
+            uint256 monthlyRent,
+            uint256 depositHeld,
+            uint16 durationMonths,
+            uint256 startTimestamp
+        ) = smartLease.leases(tokenId);
+
+        Assert.equal(uint(state), uint(LeaseState.Active), "Lease should be Active after confirmation");
+        Assert.equal(smartLease.ownerOf(tokenId), address(smartLease), "NFT must be held in escrow by contract");
+        Assert.ok(startTimestamp > 0, "Start timestamp should be set");
+        Assert.equal(tenantAddr, tenant, "Tenant still should be correct");
+        Assert.equal(monthlyRent, rent, "Monthly rent mismatch after confirmation");
+        Assert.equal(depositHeld, deposit, "Deposit mismatch after confirmation");
     }
+
 
     /// @notice Tests the default protection mechanism (Requirement #4)
     function test_5_ClaimDefault() public {
