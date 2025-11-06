@@ -8,3 +8,10 @@ cache/
 .env
 
 *.log
+
+package-lock.json
+package.json
+
+hardhat.config.js
+
+test/*
