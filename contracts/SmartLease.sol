@@ -84,6 +84,7 @@ contract SmartLease is ERC721, Ownable {
         uint256 indexed tokenId, 
         address tenant, 
         uint256 deposit
+    );
         
     event LeaseDefaultClaimed(
         uint256 indexed tokenId,
@@ -413,6 +414,7 @@ contract SmartLease is ERC721, Ownable {
         propNew.isLeased = true;
 
         emit NewLeaseStarted(newTokenId, msg.sender, msg.value);
+    }
     // ---------------------------
     // Task 4 — Default Protection
     // ---------------------------
