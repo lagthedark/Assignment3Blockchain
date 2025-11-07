@@ -1,0 +1,10 @@
+node_modules
+.deps/
+deps/
+
+artifacts/
+cache/
+
+.env
+
+*.log
