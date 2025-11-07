@@ -93,6 +93,12 @@ contract SmartLease is ERC721, Ownable {
         uint256 amountClaimed
     );
 
+    event LeaseExtended(
+        uint256 indexed tokenId,
+        uint16 newDuration,
+        uint256 newMonthly
+    );
+
     // --- Mint Property NFT ---
     // Allows the landlord to mint a new property as an NFT
     function mintProperty(
@@ -368,6 +374,12 @@ contract SmartLease is ERC721, Ownable {
             }
             require(msg.value == 0, "no ETH expected");
         }
+
+        // Update lease
+        lease.durationMonths = newDuration;
+        lease.monthlyRent = newMonthly;
+
+        emit LeaseExtended(tokenId, extensionMonths, newMonthly);
     }
 
     /// @notice Starts a brand new lease for a different property NFT.
