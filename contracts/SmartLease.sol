@@ -67,6 +67,13 @@ contract SmartLease is ERC721, Ownable {
         address landlord
     );
 
+    event LeaseDefaultClaimed(
+        uint256 indexed tokenId,
+        address indexed landlord,
+        address indexed tenant,
+        uint256 amountClaimed
+    );
+
     // --- Mint Property NFT ---
     // Allows the landlord to mint a new property as an NFT
     function mintProperty(
@@ -235,5 +242,45 @@ contract SmartLease is ERC721, Ownable {
         emit LeaseConfirmed(tokenId, msg.sender);
     }
 
+    // ---------------------------
+    // Task 4 — Default Protection
+    // ---------------------------
+    uint256 public claimDaysUmbral = 30 days; // default grace period before default claim
+    
+    /// @notice Sets the grace period for rent payments
+    /// @param newPeriod The new grace period in days
+    function setRentGracePeriod(uint256 newPeriod) external onlyOwner {
+        require(newPeriod > 0, "must be positive");
+        claimDaysUmbral = newPeriod;
+    }
 
+    /// @notice Landlord can claim the deposit and terminate if tenant misses a payment
+    /// @param tokenId The token ID of the property
+    function claimDefault(uint256 tokenId) external {
+        Property storage prop = properties[tokenId];
+        Lease storage lease = leases[tokenId];
+
+        require(lease.state == LeaseState.Active, "lease not active");
+        require(prop.landlord == msg.sender, "only landlord");
+        require(lease.startTimestamp != 0, "lease not started");
+        require(block.timestamp > lease.startTimestamp + claimDaysUmbral, "rent period not yet missed");
+
+        uint256 amountToClaim = lease.depositHeld;
+        lease.depositHeld = 0;
+        lease.state = LeaseState.Defaulted;
+        prop.isLeased = false;
+
+        // Return NFT to landlord if in escrow
+        if (ownerOf(tokenId) == address(this)) {
+            _transfer(address(this), prop.landlord, tokenId);
+        }
+
+        // Transfer deposit to landlord
+        if (amountToClaim > 0) {
+            (bool sent, ) = payable(prop.landlord).call{value: amountToClaim}("");
+            require(sent, "deposit transfer failed");
+        }
+
+        emit LeaseDefaultClaimed(tokenId, prop.landlord, lease.tenant, amountToClaim);
+    }
 }
