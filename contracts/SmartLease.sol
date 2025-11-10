@@ -146,61 +146,73 @@ contract SmartLease is ERC721, Ownable {
         );
     }
 
-    // -------------------------------------------------------------------------
-    // Task 2 — Dynamic Pricing Logic (minimal, criteria-compliant)
-    // -------------------------------------------------------------------------
-    /// @notice Calculates the monthly price for a property NFT using the required factors.
-    /// @dev view-only: no state writes. Factors are deliberately simple but valid.
-    /// @param tokenId The NFT being priced.
-    /// @param currentUsage Current period usage (e.g., km, data units, etc.).
-    /// @param usageCap Predefined option: usage cap for the period (pre-agreed limit).
-    /// @param userScore User attribute on a 0..10 scale (better = cheaper).
-    /// @param leaseDurationMonths Predefined option: lease duration in months.
-    /// @return price Monthly payment in wei.
-    function calculateMonthlyPrice(
-        uint256 tokenId,
-        uint256 currentUsage,
-        uint256 usageCap,
-        uint8 userScore,
-        uint16 leaseDurationMonths
-    ) public view returns (uint256 price) {
-        require(ownerOf(tokenId) != address(0), "nonexistent token");        require(userScore <= 10, "score 0-10");
-        // 1) Original value of the NFT (base)
-        uint256 base = properties[tokenId].baseValue;
+    /// @notice Calculates the monthly rent using simple, readable factors.
+    /// @dev Uses 1e18 fixed-point math for clarity. Interprets `condition` as WEAR (0..100).
+    /// @param tokenId Property token to price.
+    /// @param currentUsage Measured usage for the period (e.g., km, kWh, GB).
+    /// @param usageCap Agreed usage cap for the period. If 0, no cap/surcharge.
+    /// @param userScore Tenant score 0..10 (higher = better = cheaper).
+    /// @param leaseDurationMonths Duration in months (used for basic discounts).
+function calculateMonthlyPrice(
+    uint256 tokenId,
+    uint256 currentUsage,
+    uint256 usageCap,
+    uint8 userScore,
+    uint16 leaseDurationMonths
+) public view returns (uint256 price) {
+    require(ownerOf(tokenId) != address(0), "nonexistent token");
+    require(userScore <= 10, "score must be 0..10");
+    require(leaseDurationMonths > 0, "duration must be > 0");
 
-        // Use 1e18 fixed-point factors for simple, precise math.
-        uint256 ONE = 1e18;
+    // Base price anchor: the NFT’s base value (e.g., market value) spread per month.
+    uint256 base = properties[tokenId].baseValue;
+    uint256 ONE  = 1e18;
 
-        // 2) Usage factor: scales up to +20% if usage reaches or exceeds the cap.
-        //    usageRatio = min(currentUsage / usageCap, 1.0)
-        //    usageFactor = 1.0 + usageRatio * 0.20
-        uint256 denom = usageCap == 0 ? 1 : usageCap; // avoid div by zero; treat as unbounded
-        uint256 usageRatio = (currentUsage * ONE) / denom;
-        if (usageRatio > ONE) usageRatio = ONE; // clamp at 1.0
-        uint256 usageFactor = ONE + (usageRatio / 5); // +20% max
+    // --- Usage factor ---
+    // Intuition: As you approach the cap, price can rise up to +30%.
+    // If you go over the cap, add up to another +20% penalty.
+    uint256 usageFactor = ONE;
+    if (usageCap > 0) {
+        // progress toward cap: 0.0 .. 1.0
+        uint256 towardCap = _min((currentUsage * ONE) / usageCap, ONE);
+        uint256 baseSurcharge = ONE + (towardCap * 30e16) / ONE; // +0..30%
 
-        // 3) Condition factor: interprets 'condition' 0..100 as wear; add up to +10%
-        //    (If you prefer "better condition => higher price", flip the sign.)
-        uint256 cond = properties[tokenId].condition; // 0..100
-        uint256 conditionFactor = ONE + (cond * 1e15); // + (cond/100)*0.10
+        // over-cap penalty ratio: 0.0 .. (capped at 1.0)
+        uint256 over = currentUsage > usageCap
+            ? _min(((currentUsage - usageCap) * ONE) / usageCap, ONE)
+            : 0;
+        uint256 overPenalty = ONE + (over * 20e16) / ONE; // +0..20%
 
-        // 4) User attribute factor: better score reduces price (0..10 => 0..-10%)
-        //    userFactor = 1.0 - score/10
-        uint256 userFactor = ONE - (uint256(userScore) * 1e17); // 1 - score/10
-
-        // 5) Duration factor: simple discount for long leases (>=12m => -10%)
-        uint256 durationFactor = leaseDurationMonths >= 12 ? 9e17 : ONE; // 0.9 or 1.0
-
-        // Combine factors; divide by 12 for monthly.
-        // price = base * usageFactor * conditionFactor * userFactor * durationFactor / 1e18^4 / 12
-        uint256 tmp = base;
-        tmp = (tmp * usageFactor) / ONE;
-        tmp = (tmp * conditionFactor) / ONE;
-        tmp = (tmp * userFactor) / ONE;
-        tmp = (tmp * durationFactor) / ONE;
-
-        price = tmp / 12;
+        // combine
+        usageFactor = (baseSurcharge * overPenalty) / ONE;
     }
+
+    // --- Condition factor (wear 0..100) ---
+    // More wear → slightly higher rent (up to +20%).
+    uint256 wear = _min(properties[tokenId].condition, 100);
+    uint256 conditionFactor = ONE + (wear * 20e16) / 100e18; // + (wear/100)*20%
+
+    // --- User score factor (0..10) ---
+    // Better tenant → up to 15% cheaper.
+    uint256 userFactor = ONE - (uint256(userScore) * 15e16) / 10; // - (score/10)*15%
+
+    // --- Duration factor ---
+    // Longer commitments get simple step discounts.
+    uint256 durationFactor = ONE;
+    if (leaseDurationMonths >= 24)      durationFactor = 85e16; // -15%
+    else if (leaseDurationMonths >= 12) durationFactor = 90e16; // -10%
+    else if (leaseDurationMonths >= 6)  durationFactor = 95e16; //  -5%
+
+    // Combine factors then divide by 12 for monthly amount.
+    // Note: sequence keeps numbers small and readable.
+    uint256 tmp = base;
+    tmp = (tmp * usageFactor) / ONE;
+    tmp = (tmp * conditionFactor) / ONE;
+    tmp = (tmp * userFactor) / ONE;
+    tmp = (tmp * durationFactor) / ONE;
+
+    price = tmp / 12;
+}
 
     /// @notice Applies for a lease and deposits the required amount.
     /// @param tokenId The NFT being leased.
@@ -468,4 +480,8 @@ contract SmartLease is ERC721, Ownable {
 
         emit LeaseDefaultClaimed(tokenId, prop.landlord, lease.tenant, amountToClaim);
     }
+
+    function _min(uint256 a, uint256 b) internal pure returns (uint256) {
+    return a < b ? a : b;
+}
 }
