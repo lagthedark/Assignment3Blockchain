@@ -1,343 +1,213 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
 
-describe("SmartLease", function () {
+describe("SmartLease Contract", function () {
   let SmartLease, smartLease;
-  let owner, landlord, tenant;
+  let owner, landlord, tenant, stranger;
+
+  // Helper to increase blockchain time
+  const increaseTime = async (seconds) => {
+    await ethers.provider.send("evm_increaseTime", [seconds]);
+    await ethers.provider.send("evm_mine", []);
+  };
 
   beforeEach(async () => {
-    [owner, landlord, tenant] = await ethers.getSigners();
-
-    SmartLease = await ethers.getContractFactory("SmartLease");
-    smartLease = await SmartLease.connect(owner).deploy();
+    [owner, landlord, tenant, stranger] = await ethers.getSigners();
+    const SmartLeaseFactory = await ethers.getContractFactory("SmartLease");
+    smartLease = await SmartLeaseFactory.connect(owner).deploy();
     await smartLease.waitForDeployment();
   });
 
-  it("Task 1: should mint a property NFT correctly", async () => {
-    await smartLease.connect(owner).mintProperty(
-      landlord.address,
-      "Oslo Center",
-      100,
-      3,
-      2020,
-      ethers.parseEther("12"),
-      90
-    );
+  describe("Task 1: NFT Modeling", () => {
+    it("should mint a property NFT to the correct landlord", async () => {
+      await smartLease.connect(owner).mintProperty(
+        landlord.address, "Oslo Center", 100, 3, 2020, ethers.parseEther("12"), 90
+      );
 
-    const nftOwner = await smartLease.ownerOf(0);
-    expect(nftOwner).to.equal(landlord.address);
-
-    const property = await smartLease.properties(0);
-    expect(property.landlord).to.equal(landlord.address);
-    expect(property.location).to.equal("Oslo Center");
+      expect(await smartLease.ownerOf(0)).to.equal(landlord.address);
+      const property = await smartLease.properties(0);
+      expect(property.landlord).to.equal(landlord.address);
+    });
   });
 
-  it("Task 2.1: should compute a reasonable monthly rent", async () => {
-    await smartLease.connect(owner).mintProperty(
-      landlord.address,
-      "Oslo Center",
-      100,
-      3,
-      2020,
-      ethers.parseEther("12"), // base value = 12 ETH
-      85
-    );
+  describe("Task 2: Dynamic Pricing Logic", () => {
+    beforeEach(async () => {
+      await smartLease.connect(owner).mintProperty(
+        landlord.address, "Bergen", 80, 2, 2021, ethers.parseEther("10"), 85
+      );
+    });
 
-    const rent = await smartLease.calculateMonthlyPrice(0, 500, 1000, 5, 12);
+    it("should compute a reasonable monthly rent", async () => {
+      const rent = await smartLease.calculateMonthlyPrice(0, 500, 1000, 5, 12);
+      const naiveMonthly = ethers.parseEther("10") / 12n;
+      expect(rent).to.be.gt(0).and.to.be.lt(naiveMonthly);
+    });
 
-    // The rent should be positive and less than baseValue/12
-    const baseValue = ethers.parseEther("12");
-    const naiveMonthly = baseValue / 12n;
+    it("should increase rent when usage exceeds cap", async () => {
+      const rentLow = await smartLease.calculateMonthlyPrice(0, 200, 1000, 5, 12);
+      const rentHigh = await smartLease.calculateMonthlyPrice(0, 1500, 1000, 5, 12);
+      expect(rentHigh).to.be.gt(rentLow);
+    });
 
-    expect(rent).to.be.gt(0n);
-    expect(rent).to.be.lt(naiveMonthly);
+    it("should apply a discount for longer leases", async () => {
+      const shortLeaseRent = await smartLease.calculateMonthlyPrice(0, 0, 0, 8, 6);
+      const longLeaseRent = await smartLease.calculateMonthlyPrice(0, 0, 0, 8, 12);
+      expect(longLeaseRent).to.be.lt(shortLeaseRent);
+    });
+
+    it("should revert if userScore is out of bounds", async () => {
+      await expect(
+        smartLease.calculateMonthlyPrice(0, 0, 0, 11, 12)
+      ).to.be.revertedWith("score must be 0..10");
+    });
   });
 
-  it("Task 2.2: should increase rent when usage exceeds cap", async () => {
-    await smartLease.connect(owner).mintProperty(
-      landlord.address,
-      "Oslo Central",
-      100,
-      3,
-      2020,
-      ethers.parseEther("12"),
-      90
-    );
+  describe("Task 3: Fair Exchange (Apply & Confirm)", () => {
+    let rent, deposit;
 
-    const rentLow = await smartLease.calculateMonthlyPrice(0, 200, 1000, 5, 12);
-    const rentHigh = await smartLease.calculateMonthlyPrice(0, 2000, 1000, 5, 12);
+    beforeEach(async () => {
+      await smartLease.connect(owner).mintProperty(
+        landlord.address, "Stavanger", 120, 4, 2018, ethers.parseEther("15"), 95
+      );
+      rent = await smartLease.calculateMonthlyPrice(0, 0, 0, 7, 12);
+      deposit = rent * 3n;
+    });
 
-    expect(rentHigh).to.be.gt(rentLow);
+    it("should revert on incorrect deposit amount", async () => {
+      await expect(
+        smartLease.connect(tenant).applyAndDeposit(0, 0, 0, 7, 12, { value: deposit - 1n })
+      ).to.be.revertedWith("wrong deposit amount");
+    });
+
+    it("should succeed on correct deposit, setting state to Pending", async () => {
+      await smartLease.connect(tenant).applyAndDeposit(0, 0, 0, 7, 12, { value: deposit });
+      const lease = await smartLease.leases(0);
+      expect(lease.state).to.equal(1); // Enum: Pending
+      expect(lease.tenant).to.equal(tenant.address);
+      expect(lease.depositHeld).to.equal(deposit);
+    });
+
+    it("should revert if a non-landlord tries to confirm", async () => {
+      await smartLease.connect(tenant).applyAndDeposit(0, 0, 0, 7, 12, { value: deposit });
+      await smartLease.connect(landlord).approve(await smartLease.getAddress(), 0);
+      await expect(
+        smartLease.connect(stranger).confirmLease(0)
+      ).to.be.revertedWith("only landlord");
+    });
+
+    it("should confirm the lease, escrow the NFT, and set state to Active", async () => {
+      await smartLease.connect(tenant).applyAndDeposit(0, 0, 0, 7, 12, { value: deposit });
+      await smartLease.connect(landlord).approve(await smartLease.getAddress(), 0);
+      await smartLease.connect(landlord).confirmLease(0);
+
+      const lease = await smartLease.leases(0);
+      expect(lease.state).to.equal(2); // Enum: Active
+      expect(await smartLease.ownerOf(0)).to.equal(await smartLease.getAddress());
+      expect(lease.nextPaymentDueDate).to.be.gt(0);
+    });
   });
 
-  it("Task 2.3: should apply discount for long leases (>= 12 months)", async () => {
-    await smartLease.connect(owner).mintProperty(
-      landlord.address,
-      "Oslo East",
-      90,
-      3,
-      2021,
-      ethers.parseEther("10"),
-      80
-    );
+  describe("Task 4: Default Protection (Pay Rent & Claim Default)", () => {
+    let rent, deposit;
 
-    const shortLease = await smartLease.calculateMonthlyPrice(0, 0, 1000, 5, 6);
-    const longLease = await smartLease.calculateMonthlyPrice(0, 0, 1000, 5, 12);
+    beforeEach(async () => {
+      await smartLease.connect(owner).mintProperty(
+        landlord.address, "Trondheim", 90, 3, 2019, ethers.parseEther("11"), 88
+      );
+      rent = await smartLease.calculateMonthlyPrice(0, 0, 0, 8, 12);
+      deposit = rent * 3n;
 
-    expect(longLease).to.be.lt(shortLease);
-  });
+      // Setup an active lease for each test
+      await smartLease.connect(tenant).applyAndDeposit(0, 0, 0, 8, 12, { value: deposit });
+      await smartLease.connect(landlord).approve(await smartLease.getAddress(), 0);
+      await smartLease.connect(landlord).confirmLease(0);
+    });
 
-  it("Task 2.4: should revert if userScore > 10", async () => {
-    await smartLease.connect(owner).mintProperty(
-      landlord.address,
-      "Oslo West",
-      80,
-      2,
-      2020,
-      ethers.parseEther("8"),
-      70
-    );
-
-    await expect(
-      smartLease.calculateMonthlyPrice(0, 0, 1000, 11, 12)
-    ).to.be.revertedWith("score must be 0..10");
-  });
-
-
-  it("Task 3.1: should revert on wrong deposit and succeed on correct deposit", async () => {
-    await smartLease.connect(owner).mintProperty(
-      landlord.address,
-      "Oslo Center",
-      100,
-      3,
-      2020,
-      ethers.parseEther("12"),
-      90
-    );
-
-    const rent = await smartLease.calculateMonthlyPrice(0, 0, 1000, 5, 12);
-    const deposit = rent * 3n;
-
-    await expect(
-      smartLease.connect(tenant).applyAndDeposit(0, 0, 1000, 5, 12, { value: deposit / 2n })
-    ).to.be.revertedWith("wrong deposit amount");
-
-    await smartLease.connect(tenant).applyAndDeposit(0, 0, 1000, 5, 12, { value: deposit });
-    const lease = await smartLease.leases(0);
-
-    expect(lease.state).to.equal(1); // Pending
-    expect(lease.tenant).to.equal(tenant.address);
-    expect(lease.depositHeld).to.equal(deposit);
-  });
-
-  it("Task 3.2: should confirm lease and escrow NFT", async () => {
-    await smartLease.connect(owner).mintProperty(
-      landlord.address,
-      "Oslo Center",
-      100,
-      3,
-      2020,
-      ethers.parseEther("12"),
-      90
-    );
-
-    const rent = await smartLease.calculateMonthlyPrice(0, 0, 1000, 5, 12);
-    const deposit = rent * 3n;
-
-    await smartLease.connect(tenant).applyAndDeposit(0, 0, 1000, 5, 12, { value: deposit });
-
-    await smartLease.connect(landlord).approve(await smartLease.getAddress(), 0);
-    await smartLease.connect(landlord).confirmLease(0);
-
-    const lease = await smartLease.leases(0);
-    expect(lease.state).to.equal(2); // Active
-    expect(await smartLease.ownerOf(0)).to.equal(await smartLease.getAddress());
-  });
-
-
-  it("Task 4.1: should confirm lease and escrow NFT", async () => {
-    await smartLease.connect(owner).mintProperty(
-      landlord.address,
-      "Oslo Center",
-      100,
-      3,
-      2020,
-      ethers.parseEther("12"),
-      90
-    );
-
-    const rent = await smartLease.calculateMonthlyPrice(0, 0, 1000, 5, 12);
-    const deposit = rent * 3n;
-    await smartLease.connect(tenant).applyAndDeposit(0, 0, 1000, 5, 12, { value: deposit });
-
-    await smartLease.connect(landlord).approve(await smartLease.getAddress(), 0);
-    await smartLease.connect(landlord).confirmLease(0);
-
-    const lease = await smartLease.leases(0);
-    expect(lease.state).to.equal(2); // Active
-    expect(await smartLease.ownerOf(0)).to.equal(await smartLease.getAddress());
-  });
-
-  it("Task 4.2: should allow owner to change rentGracePeriod", async () => {
-    const defaultPeriod = await smartLease.claimDaysUmbral();
-    expect(defaultPeriod).to.equal(30n * 24n * 60n * 60n); // 30 days
-
-    await smartLease.connect(owner).setRentGracePeriod(15n * 24n * 60n * 60n);
-
-    const newPeriod = await smartLease.claimDaysUmbral();
-    expect(newPeriod).to.equal(15n * 24n * 60n * 60n);
-  });
-
-  it("Task 4.3: should allow landlord to claim default after grace period", async function () {
-    this.timeout(10000); // 10s timeout
-
-    await smartLease.connect(owner).setRentGracePeriod(1n);
-    await smartLease.connect(owner).mintProperty(
-      landlord.address,
-      "Oslo Center",
-      100,
-      3,
-      2020,
-      ethers.parseEther("12"),
-      90
-    );
-    const rent = await smartLease.calculateMonthlyPrice(0, 0, 1000, 0, 1);
-    const deposit = rent * 3n;
-    await smartLease.connect(tenant).applyAndDeposit(0, 0, 1000, 0, 1, { value: deposit });
-
-    await smartLease.connect(landlord).approve(await smartLease.getAddress(), 0);
-    await smartLease.connect(landlord).confirmLease(0);
-
-    await ethers.provider.send("evm_mine", []);
-
-    const gracePeriod = (await smartLease.claimDaysUmbral()).toString();
-    await ethers.provider.send("evm_increaseTime", [parseInt(gracePeriod) + 5]);
-    await ethers.provider.send("evm_mine", []);
-
-    const contractBalance = await ethers.provider.getBalance(await smartLease.getAddress());
-    expect(contractBalance).to.equal(deposit);
-
-    const landlordBalanceBefore = await ethers.provider.getBalance(landlord.address);
-    const tx = await smartLease.connect(landlord).claimDefault(0);
-    const receipt = await tx.wait();
-    const gasUsed = receipt.gasUsed * receipt.gasPrice;
-
-    const landlordBalanceAfter = await ethers.provider.getBalance(landlord.address);
-    expect(landlordBalanceAfter).to.be.greaterThan(landlordBalanceBefore);
-
-    const lease = await smartLease.leases(0);
-    expect(lease.state).to.equal(4);
-
-    const nftOwner = await smartLease.ownerOf(0);
-    expect(nftOwner).to.equal(landlord.address);
-  });
+    it("should allow tenant to pay rent, updating the due date", async () => {
+      const leaseBefore = await smartLease.leases(0);
+      await smartLease.connect(tenant).payRent(0, { value: rent });
+      const leaseAfter = await smartLease.leases(0);
+      expect(leaseAfter.nextPaymentDueDate).to.be.gt(leaseBefore.nextPaymentDueDate);
+    });
     
-  it("Test 5.1: should only allow lease termination after expiry", async () => {
-    await smartLease.connect(owner).mintProperty(
-      landlord.address,
-      "Bergen Central",
-      85,
-      2,
-      2021,
-      ethers.parseEther("10"),
-      80
-    );
-    const rent = await smartLease.calculateMonthlyPrice(0, 0, 1000, 5, 12);
-    const deposit = rent * 3n;
+    it("should revert if landlord claims default before due date", async () => {
+      await expect(
+        smartLease.connect(landlord).claimDefault(0)
+      ).to.be.revertedWith("Rent is not overdue yet");
+    });
 
-    // Apply, approve, confirm
-    await smartLease.connect(tenant).applyAndDeposit(0, 0, 1000, 5, 12, { value: deposit });
-    await smartLease.connect(landlord).approve(await smartLease.getAddress(), 0);
-    await smartLease.connect(landlord).confirmLease(0);
+    it("should allow landlord to claim default, receiving deposit and resetting the lease", async () => {
+        // Fast-forward time past the due date
+        await increaseTime(31 * 24 * 60 * 60); // 31 days
 
-    // Try to terminate early → should revert
-    await expect(
-      smartLease.connect(tenant).terminateLease(0)
-    ).to.be.revertedWith("lease not yet expired");
+        await expect(() =>
+            smartLease.connect(landlord).claimDefault(0)
+        ).to.changeEtherBalance(landlord, deposit); 
+        expect(await smartLease.ownerOf(0)).to.equal(landlord.address);
+        const lease = await smartLease.leases(0);
+        expect(lease.state).to.equal(0); // Enum: None
+        expect(lease.tenant).to.equal(ethers.ZeroAddress);
+        expect(lease.depositHeld).to.equal(0);
 
-    // Simulate lease end (12 months = ~31,536,000 seconds)
-    await ethers.provider.send("evm_increaseTime", [31_536_000]);
-    await ethers.provider.send("evm_mine");
-
-    // Now termination should succeed
-    await expect(smartLease.connect(tenant).terminateLease(0))
-      .to.emit(smartLease, "LeaseTerminated");
-
-    const lease = await smartLease.leases(0);
-    expect(lease.state).to.equal(3); // Terminated
-    expect(await smartLease.ownerOf(0)).to.equal(landlord.address);
+        const newTenant = stranger;
+        const newRent = await smartLease.calculateMonthlyPrice(0, 0, 0, 5, 12);
+        const newDeposit = newRent * 3n;
+        
+        await expect(
+            smartLease.connect(newTenant).applyAndDeposit(0, 0, 0, 5, 12, { value: newDeposit })
+        ).to.not.be.reverted;
+    });
   });
 
-  it("Test 5.2: should allow tenant to extend lease and recalculate rent", async () => {
-  await smartLease.connect(owner).mintProperty(
-    landlord.address,
-    "Trondheim",
-    120,
-    4,
-    2019,
-    ethers.parseEther("15"),
-    85
-  );
+  describe("Task 5: End-of-Lease Options", () => {
+    let rent, deposit;
 
-  const rent = await smartLease.calculateMonthlyPrice(0, 0, 1200, 5, 12);
-  const deposit = rent * 3n;
+    beforeEach(async () => {
+      await smartLease.connect(owner).mintProperty(
+        landlord.address, "Kristiansand", 75, 2, 2022, ethers.parseEther("9"), 92
+      );
+      rent = await smartLease.calculateMonthlyPrice(0, 0, 0, 9, 12);
+      deposit = rent * 3n;
 
-  await smartLease.connect(tenant).applyAndDeposit(0, 0, 1200, 5, 12, { value: deposit });
-  await smartLease.connect(landlord).approve(await smartLease.getAddress(), 0);
-  await smartLease.connect(landlord).confirmLease(0);
+      // Setup an active lease
+      await smartLease.connect(tenant).applyAndDeposit(0, 0, 0, 9, 12, { value: deposit });
+      await smartLease.connect(landlord).approve(await smartLease.getAddress(), 0);
+      await smartLease.connect(landlord).confirmLease(0);
+    });
 
-  const oldLease = await smartLease.leases(0);
-  await smartLease.connect(tenant).extendLease(0, 12, 0, 1200, 5);
-  const newLease = await smartLease.leases(0);
+    it("should revert if lease is terminated before expiry", async () => {
+      await expect(
+        smartLease.connect(tenant).terminateLease(0)
+      ).to.be.revertedWith("lease not yet expired");
+    });
 
-  expect(newLease.state).to.equal(2); // Active
-  expect(newLease.durationMonths).to.equal(oldLease.durationMonths + 12n);
-  });
+    it("should terminate lease after expiry, refunding tenant and returning NFT", async () => {
+      await increaseTime(366 * 24 * 60 * 60); // ~1 year and 1 day
 
-  it("Test 5.3: should allow tenant to start new lease for a different NFT", async () => {
-    // First property & lease
-    await smartLease.connect(owner).mintProperty(
-      landlord.address,
-      "Oslo West",
-      95,
-      3,
-      2020,
-      ethers.parseEther("11"),
-      90
-    );
+      await expect(() => 
+          smartLease.connect(tenant).terminateLease(0)
+      ).to.changeEtherBalance(tenant, deposit);
 
-    const rent1 = await smartLease.calculateMonthlyPrice(0, 0, 1100, 5, 12);
-    const deposit1 = rent1 * 3n;
+      const lease = await smartLease.leases(0);
+      expect(lease.state).to.equal(0); // Enum: None
+      expect(lease.tenant).to.equal(ethers.ZeroAddress);
+    });
 
-    await smartLease.connect(tenant).applyAndDeposit(0, 0, 1100, 5, 12, { value: deposit1 });
-    await smartLease.connect(landlord).approve(await smartLease.getAddress(), 0);
-    await smartLease.connect(landlord).confirmLease(0);
+    it("should extend a lease, recalculating rent and adjusting deposit", async () => {
+        const oldLease = await smartLease.leases(0);
+        const newRent = await smartLease.calculateMonthlyPrice(0, 0, 0, 9, 24); // Extending for another 12 months (total 24)
+        
+        // Since new rent for a longer period is cheaper, a refund is expected
+        const newDeposit = newRent * 3n;
+        const refund = oldLease.depositHeld - newDeposit;
+        expect(refund).to.be.gt(0);
 
-    // Simulate lease expiration
-    await ethers.provider.send("evm_increaseTime", [31_536_000]);
-    await ethers.provider.send("evm_mine");
-    await smartLease.connect(tenant).terminateLease(0);
+        await smartLease.connect(tenant).extendLease(0, 12, 0, 0, 9);
+        const extendedLease = await smartLease.leases(0);
 
-    // Mint new property and start new lease
-    await smartLease.connect(owner).mintProperty(
-      landlord.address,
-      "Oslo East",
-      100,
-      3,
-      2021,
-      ethers.parseEther("13"),
-      85
-    );
-
-    const rent2 = await smartLease.calculateMonthlyPrice(1, 0, 1100, 5, 12);
-    const deposit2 = rent2 * 3n;
-
-    await smartLease.connect(tenant).applyAndDeposit(1, 0, 1100, 5, 12, { value: deposit2 });
-    await smartLease.connect(landlord).approve(await smartLease.getAddress(), 1);
-    await smartLease.connect(landlord).confirmLease(1);
-
-    const lease2 = await smartLease.leases(1);
-    expect(lease2.state).to.equal(2); // Active
-    expect(await smartLease.ownerOf(1)).to.equal(await smartLease.getAddress());
+        expect(extendedLease.durationMonths).to.equal(24);
+        expect(extendedLease.monthlyRent).to.equal(newRent);
+        expect(extendedLease.depositHeld).to.equal(newDeposit);
+    });
   });
 });

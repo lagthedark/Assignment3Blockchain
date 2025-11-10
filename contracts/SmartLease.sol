@@ -4,6 +4,7 @@ pragma solidity ^0.8.26;
 // OpenZeppelin ERC-721 + Ownable
 import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 enum LeaseState {
     None,
@@ -13,7 +14,7 @@ enum LeaseState {
     Defaulted
 }
 
-contract SmartLease is ERC721, Ownable {
+contract SmartLease is ERC721, Ownable, ReentrancyGuard {
     constructor() ERC721("SmartLease Property", "SLEASE") Ownable(msg.sender) {}
 
     // --- Property Struct ---
@@ -38,6 +39,7 @@ contract SmartLease is ERC721, Ownable {
         uint256 depositHeld;     
         uint16 durationMonths;
         uint256 startTimestamp;
+        uint256 nextPaymentDueDate;
     }
 
     // Store properties and leases
@@ -240,7 +242,8 @@ contract SmartLease is ERC721, Ownable {
             monthlyRent: monthly,
             depositHeld: msg.value,
             durationMonths: leaseDurationMonths,
-            startTimestamp: 0
+            startTimestamp: 0,
+            nextPaymentDueDate: 0
         });
 
         prop.isLeased = true;
@@ -268,8 +271,30 @@ contract SmartLease is ERC721, Ownable {
 
         lease.state = LeaseState.Active;
         lease.startTimestamp = block.timestamp;
+        lease.nextPaymentDueDate = block.timestamp + 30 days;
 
         emit LeaseConfirmed(tokenId, msg.sender);
+    }
+    
+    /// @notice Pay the monthly rent for an active lease.
+    /// @dev The tenant must call this function and send the exact monthly rent amount.
+    ///     The function will update the next due date for the following month and forward the payment to the landlord.
+    /// @param tokenId The NFT being leased.
+    function payRent(uint256 tokenId) external payable nonReentrant {
+        Lease storage lease = leases[tokenId];
+        Property storage prop = properties[tokenId];
+
+        require(lease.state == LeaseState.Active, "Lease is not active");
+        require(msg.sender == lease.tenant, "Only the tenant can pay rent");
+        require(msg.value == lease.monthlyRent, "Incorrect rent amount sent");
+        require(block.timestamp <= lease.nextPaymentDueDate, "Payment is late, contact landlord");
+
+        // Step 1 (Effect): Update the next due date for the following month
+        lease.nextPaymentDueDate += 30 days;
+
+        // Step 2 (Interaction): Forward the payment to the landlord
+        (bool sent, ) = payable(prop.landlord).call{value: msg.value}("");
+        require(sent, "Failed to send rent to landlord");
     }
 
     // compute lease expiration timestamp
@@ -295,41 +320,36 @@ contract SmartLease is ERC721, Ownable {
     ///      - Refunds the security deposit to the tenant,
     ///      - Clears lease metadata to save gas on future reuses.
     /// @param tokenId The token ID of the leased property NFT.
-    function terminateLease(uint256 tokenId) external {
+    function terminateLease(uint256 tokenId) external nonReentrant {
         Lease storage lease = leases[tokenId];
         Property storage prop = properties[tokenId];
 
+        // Checks
         require(lease.state == LeaseState.Active, "lease not active");
         require(msg.sender == lease.tenant, "only tenant");
         require(isLeaseExpired(tokenId), "lease not yet expired");
 
+        // Read values to memory before state changes
         uint256 refund = lease.depositHeld;
+        address tenantAddress = lease.tenant;
+        address landlordAddress = prop.landlord;
 
         // Effects
-        lease.state = LeaseState.Terminated;
-        lease.depositHeld = 0;
         prop.isLeased = false;
+        delete leases[tokenId]; // This resets the lease state to None.
 
-        // Interactions: return NFT to landlord if contract holds it
+        emit LeaseTerminated(tokenId, tenantAddress, refund);
+
+        // Interactions
         if (ownerOf(tokenId) == address(this)) {
-            _transfer(address(this), prop.landlord, tokenId);
+            _transfer(address(this), landlordAddress, tokenId);
         } 
 
-        // Transfer refund to tenant (if any)
         if (refund > 0) {
-            (bool ok, ) = payable(lease.tenant).call{value: refund}("");
+            (bool ok, ) = payable(tenantAddress).call{value: refund}("");
             require(ok, "refund failed");
         }
-
-        emit LeaseTerminated(tokenId, lease.tenant, refund);
-
-        // Clean up lease mapping 
-        lease.tenant = address(0);
-        lease.monthlyRent = 0;
-        lease.durationMonths = 0;
-        lease.startTimestamp = 0;
     }
-
 
     /// @notice Extends an active lease for additional months with dynamic price adjustment.
     /// @dev Can only be called by the current tenant while the lease is active.
@@ -421,7 +441,8 @@ contract SmartLease is ERC721, Ownable {
             monthlyRent: monthly,
             depositHeld: msg.value,
             durationMonths: leaseDurationMonths,
-            startTimestamp: 0
+            startTimestamp: 0,
+            nextPaymentDueDate: 0
         });
 
         propNew.isLeased = true;
@@ -429,37 +450,27 @@ contract SmartLease is ERC721, Ownable {
         emit NewLeaseStarted(newTokenId, msg.sender, msg.value);
     }
 
-    uint256 public claimDaysUmbral = 30 days; // default grace period before default claim
-    
-    /// @notice Sets the grace period for rent payments. The grace period is the
-    ///        amount of time (in days) that a tenant has to pay their rent
-    ///        after the due date has passed. If the tenant misses a payment and
-    ///        the grace period has passed, the landlord can claim the deposit
-    ///        and terminate the lease.
-    /// @param newPeriod The new grace period in days. Must be greater than 0.
-    function setRentGracePeriod(uint256 newPeriod) external onlyOwner {
-        require(newPeriod > 0, "must be positive");
-        claimDaysUmbral = newPeriod;
-    }
-
     /// @notice Allows the landlord to claim the deposit and terminate the lease
     ///        if the tenant has missed a payment. This function can only be called
     ///        by the landlord, and only if the lease is active and the rent
     ///        period has been missed.
     /// @param tokenId The token ID of the property NFT.
-    function claimDefault(uint256 tokenId) external {
+    function claimDefault(uint256 tokenId) external nonReentrant {
         Property storage prop = properties[tokenId];
         Lease storage lease = leases[tokenId];
 
         require(lease.state == LeaseState.Active, "lease not active");
         require(prop.landlord == msg.sender, "only landlord");
         require(lease.startTimestamp != 0, "lease not started");
-        require(block.timestamp > lease.startTimestamp + claimDaysUmbral, "rent period not yet missed");
-
+        require(block.timestamp > lease.nextPaymentDueDate, "Rent is not overdue yet");
         uint256 amountToClaim = lease.depositHeld;
         lease.depositHeld = 0;
         lease.state = LeaseState.Defaulted;
         prop.isLeased = false;
+
+        emit LeaseDefaultClaimed(tokenId, prop.landlord, lease.tenant, amountToClaim);
+
+        delete leases[tokenId];
 
         // Return NFT to landlord if in escrow
         if (ownerOf(tokenId) == address(this)) {
@@ -472,7 +483,6 @@ contract SmartLease is ERC721, Ownable {
             require(sent, "deposit transfer failed");
         }
 
-        emit LeaseDefaultClaimed(tokenId, prop.landlord, lease.tenant, amountToClaim);
     }
 
     /// @dev Helper function to get the minimum of two uint256 values.
