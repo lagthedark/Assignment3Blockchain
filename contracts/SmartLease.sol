@@ -73,13 +73,6 @@ contract SmartLease is ERC721, Ownable {
         uint256 refunded
     );
 
-    event LeaseExtended(
-        uint256 indexed tokenId, 
-        address tenant, 
-        uint16 newDurationMonths, 
-        uint256 newMonthlyRent, 
-        uint256 depositDelta
-    );
     event NewLeaseStarted(
         uint256 indexed tokenId, 
         address tenant, 
@@ -153,66 +146,66 @@ contract SmartLease is ERC721, Ownable {
     /// @param usageCap Agreed usage cap for the period. If 0, no cap/surcharge.
     /// @param userScore Tenant score 0..10 (higher = better = cheaper).
     /// @param leaseDurationMonths Duration in months (used for basic discounts).
-function calculateMonthlyPrice(
-    uint256 tokenId,
-    uint256 currentUsage,
-    uint256 usageCap,
-    uint8 userScore,
-    uint16 leaseDurationMonths
-) public view returns (uint256 price) {
-    require(ownerOf(tokenId) != address(0), "nonexistent token");
-    require(userScore <= 10, "score must be 0..10");
-    require(leaseDurationMonths > 0, "duration must be > 0");
+    function calculateMonthlyPrice(
+        uint256 tokenId,
+        uint256 currentUsage,
+        uint256 usageCap,
+        uint8 userScore,
+        uint16 leaseDurationMonths
+    ) public view returns (uint256 price) {
+        require(ownerOf(tokenId) != address(0), "nonexistent token");
+        require(userScore <= 10, "score must be 0..10");
+        require(leaseDurationMonths > 0, "duration must be > 0");
 
-    // Base price anchor: the NFT’s base value (e.g., market value) spread per month.
-    uint256 base = properties[tokenId].baseValue;
-    uint256 ONE  = 1e18;
+        // Base price anchor: the NFT’s base value (e.g., market value) spread per month.
+        uint256 base = properties[tokenId].baseValue;
+        uint256 ONE  = 1e18;
 
-    // --- Usage factor ---
-    // Intuition: As you approach the cap, price can rise up to +30%.
-    // If you go over the cap, add up to another +20% penalty.
-    uint256 usageFactor = ONE;
-    if (usageCap > 0) {
-        // progress toward cap: 0.0 .. 1.0
-        uint256 towardCap = _min((currentUsage * ONE) / usageCap, ONE);
-        uint256 baseSurcharge = ONE + (towardCap * 30e16) / ONE; // +0..30%
+        // --- Usage factor ---
+        // Intuition: As you approach the cap, price can rise up to +30%.
+        // If you go over the cap, add up to another +20% penalty.
+        uint256 usageFactor = ONE;
+        if (usageCap > 0) {
+            // progress toward cap: 0.0 .. 1.0
+            uint256 towardCap = _min((currentUsage * ONE) / usageCap, ONE);
+            uint256 baseSurcharge = ONE + (towardCap * 30e16) / ONE; // +0..30%
 
-        // over-cap penalty ratio: 0.0 .. (capped at 1.0)
-        uint256 over = currentUsage > usageCap
-            ? _min(((currentUsage - usageCap) * ONE) / usageCap, ONE)
-            : 0;
-        uint256 overPenalty = ONE + (over * 20e16) / ONE; // +0..20%
+            // over-cap penalty ratio: 0.0 .. (capped at 1.0)
+            uint256 over = currentUsage > usageCap
+                ? _min(((currentUsage - usageCap) * ONE) / usageCap, ONE)
+                : 0;
+            uint256 overPenalty = ONE + (over * 20e16) / ONE; // +0..20%
 
-        // combine
-        usageFactor = (baseSurcharge * overPenalty) / ONE;
+            // combine
+            usageFactor = (baseSurcharge * overPenalty) / ONE;
+        }
+
+        // --- Condition factor (wear 0..100) ---
+        // More wear → slightly higher rent (up to +20%).
+        uint256 wear = _min(properties[tokenId].condition, 100);
+        uint256 conditionFactor = ONE + (wear * 20e16) / 100e18; // + (wear/100)*20%
+
+        // --- User score factor (0..10) ---
+        // Better tenant → up to 15% cheaper.
+        uint256 userFactor = ONE - (uint256(userScore) * 15e16) / 10; // - (score/10)*15%
+
+        // --- Duration factor ---
+        // Longer commitments get simple step discounts.
+        uint256 durationFactor = ONE;
+        if (leaseDurationMonths >= 24)      durationFactor = 85e16; // -15%
+        else if (leaseDurationMonths >= 12) durationFactor = 90e16; // -10%
+        else if (leaseDurationMonths >= 6)  durationFactor = 95e16; //  -5%
+
+        // Combine factors then divide by 12 for monthly amount.
+        // Note: sequence keeps numbers small and readable.
+        uint256 tmp = base;
+        tmp = (tmp * usageFactor) / ONE;
+        tmp = (tmp * conditionFactor) / ONE;
+        tmp = (tmp * userFactor) / ONE;
+        tmp = (tmp * durationFactor) / ONE;
+
+        price = tmp / 12;
     }
-
-    // --- Condition factor (wear 0..100) ---
-    // More wear → slightly higher rent (up to +20%).
-    uint256 wear = _min(properties[tokenId].condition, 100);
-    uint256 conditionFactor = ONE + (wear * 20e16) / 100e18; // + (wear/100)*20%
-
-    // --- User score factor (0..10) ---
-    // Better tenant → up to 15% cheaper.
-    uint256 userFactor = ONE - (uint256(userScore) * 15e16) / 10; // - (score/10)*15%
-
-    // --- Duration factor ---
-    // Longer commitments get simple step discounts.
-    uint256 durationFactor = ONE;
-    if (leaseDurationMonths >= 24)      durationFactor = 85e16; // -15%
-    else if (leaseDurationMonths >= 12) durationFactor = 90e16; // -10%
-    else if (leaseDurationMonths >= 6)  durationFactor = 95e16; //  -5%
-
-    // Combine factors then divide by 12 for monthly amount.
-    // Note: sequence keeps numbers small and readable.
-    uint256 tmp = base;
-    tmp = (tmp * usageFactor) / ONE;
-    tmp = (tmp * conditionFactor) / ONE;
-    tmp = (tmp * userFactor) / ONE;
-    tmp = (tmp * durationFactor) / ONE;
-
-    price = tmp / 12;
-}
 
     /// @notice Applies for a lease and deposits the required amount.
     /// @param tokenId The NFT being leased.
@@ -278,10 +271,6 @@ function calculateMonthlyPrice(
 
         emit LeaseConfirmed(tokenId, msg.sender);
     }
-
-    // -------------------------------------------------------------------------
-    // Task 5 — Contract End Options
-    // -------------------------------------------------------------------------
 
     // compute lease expiration timestamp
     function leaseExpirationTimestamp(uint256 tokenId) public view returns (uint256) {
@@ -439,20 +428,25 @@ function calculateMonthlyPrice(
 
         emit NewLeaseStarted(newTokenId, msg.sender, msg.value);
     }
-    // ---------------------------
-    // Task 4 — Default Protection
-    // ---------------------------
+
     uint256 public claimDaysUmbral = 30 days; // default grace period before default claim
     
-    /// @notice Sets the grace period for rent payments
-    /// @param newPeriod The new grace period in days
+    /// @notice Sets the grace period for rent payments. The grace period is the
+    ///        amount of time (in days) that a tenant has to pay their rent
+    ///        after the due date has passed. If the tenant misses a payment and
+    ///        the grace period has passed, the landlord can claim the deposit
+    ///        and terminate the lease.
+    /// @param newPeriod The new grace period in days. Must be greater than 0.
     function setRentGracePeriod(uint256 newPeriod) external onlyOwner {
         require(newPeriod > 0, "must be positive");
         claimDaysUmbral = newPeriod;
     }
 
-    /// @notice Landlord can claim the deposit and terminate if tenant misses a payment
-    /// @param tokenId The token ID of the property
+    /// @notice Allows the landlord to claim the deposit and terminate the lease
+    ///        if the tenant has missed a payment. This function can only be called
+    ///        by the landlord, and only if the lease is active and the rent
+    ///        period has been missed.
+    /// @param tokenId The token ID of the property NFT.
     function claimDefault(uint256 tokenId) external {
         Property storage prop = properties[tokenId];
         Lease storage lease = leases[tokenId];
@@ -481,6 +475,10 @@ function calculateMonthlyPrice(
         emit LeaseDefaultClaimed(tokenId, prop.landlord, lease.tenant, amountToClaim);
     }
 
+    /// @dev Helper function to get the minimum of two uint256 values.
+    /// @param a The first value to compare.
+    /// @param b The second value to compare.
+    /// @return The minimum of a and b.
     function _min(uint256 a, uint256 b) internal pure returns (uint256) {
     return a < b ? a : b;
 }
