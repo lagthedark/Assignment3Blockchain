@@ -15,10 +15,10 @@
 ## 2. Implementation Checklist
 
 -   [x] **1. NFT Modeling**: Implement ERC-721 with `Property` struct and `mintProperty` function.
--   [ ] **2. Dynamic Pricing**: Implement the `computeMonthlyRent` view function.
--   [ ] **3. Fair Exchange**: Implement `applyAndDeposit` and `confirmLease` functions, including NFT escrow.
--   [ ] **4. Default Protection**: Implement `claimDefault` function.
--   [ ] **5. End-of-Lease**: Implement `payRent`, `terminateLease`, and `extendLease` functions.
+-   [x] **2. Dynamic Pricing**: Implement the `computeMonthlyRent` view function.
+-   [x] **3. Fair Exchange**: Implement `applyAndDeposit` and `confirmLease` functions, including NFT escrow.
+-   [x] **4. Default Protection**: Implement `claimDefault` function.
+-   [x] **5. End-of-Lease**: Implement `payRent`, `terminateLease`, and `extendLease` functions.
 
 ## 3. Project Structure and File Roles
 
