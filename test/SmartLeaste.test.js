@@ -32,6 +32,78 @@ describe("SmartLease", function () {
     expect(property.location).to.equal("Oslo Center");
   });
 
+  it("Task 2.1: should compute a reasonable monthly rent", async () => {
+    await smartLease.connect(owner).mintProperty(
+      landlord.address,
+      "Oslo Center",
+      100,
+      3,
+      2020,
+      ethers.parseEther("12"), // base value = 12 ETH
+      85
+    );
+
+    const rent = await smartLease.calculateMonthlyPrice(0, 500, 1000, 5, 12);
+
+    // The rent should be positive and less than baseValue/12
+    const baseValue = ethers.parseEther("12");
+    const naiveMonthly = baseValue / 12n;
+
+    expect(rent).to.be.gt(0n);
+    expect(rent).to.be.lt(naiveMonthly);
+  });
+
+  it("Task 2.2: should increase rent when usage exceeds cap", async () => {
+    await smartLease.connect(owner).mintProperty(
+      landlord.address,
+      "Oslo Central",
+      100,
+      3,
+      2020,
+      ethers.parseEther("12"),
+      90
+    );
+
+    const rentLow = await smartLease.calculateMonthlyPrice(0, 200, 1000, 5, 12);
+    const rentHigh = await smartLease.calculateMonthlyPrice(0, 2000, 1000, 5, 12);
+
+    expect(rentHigh).to.be.gt(rentLow);
+  });
+
+  it("Task 2.3: should apply discount for long leases (>= 12 months)", async () => {
+    await smartLease.connect(owner).mintProperty(
+      landlord.address,
+      "Oslo East",
+      90,
+      3,
+      2021,
+      ethers.parseEther("10"),
+      80
+    );
+
+    const shortLease = await smartLease.calculateMonthlyPrice(0, 0, 1000, 5, 6);
+    const longLease = await smartLease.calculateMonthlyPrice(0, 0, 1000, 5, 12);
+
+    expect(longLease).to.be.lt(shortLease);
+  });
+
+  it("Task 2.4: should revert if userScore > 10", async () => {
+    await smartLease.connect(owner).mintProperty(
+      landlord.address,
+      "Oslo West",
+      80,
+      2,
+      2020,
+      ethers.parseEther("8"),
+      70
+    );
+
+    await expect(
+      smartLease.calculateMonthlyPrice(0, 0, 1000, 11, 12)
+    ).to.be.revertedWith("score must be 0..10");
+  });
+
+
   it("Task 3.1: should revert on wrong deposit and succeed on correct deposit", async () => {
     await smartLease.connect(owner).mintProperty(
       landlord.address,
